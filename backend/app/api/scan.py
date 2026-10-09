@@ -51,7 +51,7 @@ async def scan_image(file: UploadFile = File(...), user: User = Depends(current_
         raise HTTPException(422, "No readable text was found in the image")
 
     result = analyze_content(text)
-    enhanced = await explain_with_openai(result)
+    enhanced = await explain_analysis(result)
     if enhanced:
         result["explanation"] = enhanced
     ai = await persist_manual_analysis(db, user, text, result)

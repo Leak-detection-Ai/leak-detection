@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     social_sync_interval_seconds: int = 60
 
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
 
     mastodon_instance: str = "https://mastodon.social"
     mastodon_client_name: str = "LeakGuard"
