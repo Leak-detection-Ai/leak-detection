@@ -4,8 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "LeakGuard"
     app_env: str = "development"
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+
     frontend_origin: str = "http://localhost:5173"
 
     database_url: str
@@ -25,11 +27,6 @@ class Settings(BaseSettings):
     max_upload_mb: int = 5
     social_sync_interval_seconds: int = 60
 
-    # OpenRouter
-    openrouter_api_key: str | None = None
-    openrouter_model: str = "google/gemma-4-26b-a4b-it:free"
-
-    # Mastodon
     mastodon_instance: str = "https://mastodon.social"
     mastodon_client_name: str = "LeakGuard"
     mastodon_client_website: str = "http://localhost:5173"
@@ -43,7 +40,6 @@ class Settings(BaseSettings):
 
     mastodon_scopes: str = "read:accounts read:statuses"
 
-    # Demo
     seed_demo: bool = False
     demo_email: str = "demo@example.com"
     demo_password: str = "ChangeThisDemoPassword123!"

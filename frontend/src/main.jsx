@@ -1165,7 +1165,142 @@ function Scanner() {
 /* -------------------------------------------------------
    MASTODON ACCOUNTS
 ------------------------------------------------------- */
+/* -------------------------------------------------------
+   MASTODON BROWSER OCR
+------------------------------------------------------- */
 
+async function processMastodonOCRQueue(
+  accountId,
+  queue
+) {
+  if (
+    !Array.isArray(queue) ||
+    queue.length === 0
+  ) {
+    return {
+      scanned: 0,
+      failed: 0,
+    };
+  }
+
+  let worker = null;
+
+  let scanned = 0;
+  let failed = 0;
+
+  try {
+    /*
+      One Tesseract worker is reused for all images
+      in this sync operation.
+    */
+    worker = await createWorker("eng");
+
+    for (const content of queue) {
+      const extractedParts = [];
+
+      let contentFailed = false;
+
+      for (
+        const media of content.media || []
+      ) {
+        try {
+          /*
+            Request the image through our own backend.
+            This avoids browser CORS restrictions against
+            Mastodon's media server.
+          */
+          const response =
+            await api.get(
+              `/accounts/${accountId}/content/${encodeURIComponent(
+                content.content_id
+              )}/media/${media.index}`,
+              {
+                responseType: "blob",
+              }
+            );
+
+          /*
+            OCR runs entirely inside the browser.
+            No OpenRouter/Gemini/API key is required.
+          */
+          const {
+            data,
+          } = await worker.recognize(
+            response.data
+          );
+
+          const extracted =
+            data?.text?.trim() || "";
+
+          if (extracted) {
+            extractedParts.push(
+              extracted
+            );
+          }
+
+        } catch (error) {
+          contentFailed = true;
+          failed += 1;
+
+          console.error(
+            "Mastodon image OCR failed",
+            error
+          );
+        }
+      }
+
+      /*
+        Do not permanently mark the post as processed
+        when an image request failed.
+
+        A later Sync can retry it.
+      */
+      if (contentFailed) {
+        continue;
+      }
+
+      try {
+        await api.post(
+          `/accounts/${accountId}/content/${encodeURIComponent(
+            content.content_id
+          )}/ocr`,
+          {
+            ocr_text:
+              extractedParts.join(
+                "\n\n"
+              ),
+          }
+        );
+
+        scanned += 1;
+
+      } catch (error) {
+        failed += 1;
+
+        console.error(
+          "Saving Mastodon OCR result failed",
+          error
+        );
+      }
+    }
+
+  } finally {
+    if (worker) {
+      try {
+        await worker.terminate();
+      } catch {
+        /*
+          Ignore worker cleanup errors.
+        */
+      }
+    }
+  }
+
+  return {
+    scanned,
+    failed,
+  };
+}
 function Accounts() {
   const [accounts, setAccounts] =
     useState([]);
@@ -1193,24 +1328,63 @@ function Accounts() {
   }, []);
 
   async function sync(id) {
-    setBusy(id);
-    setError("");
+  setBusy(id);
+  setError("");
 
-    try {
+  try {
+    /*
+      Step 1:
+      Backend synchronizes Mastodon and returns
+      image posts that need browser OCR.
+    */
+    const response =
       await api.post(
         `/accounts/${id}/sync`
       );
 
-      await load();
-    } catch (error) {
-      setError(
-        error.response?.data?.detail ||
-          "Sync failed"
-      );
-    } finally {
-      setBusy("");
+    const queue =
+      response.data?.ocr_queue || [];
+
+    /*
+      Step 2:
+      OCR every image locally using Tesseract.js.
+    */
+    if (queue.length > 0) {
+      const ocrResult =
+        await processMastodonOCRQueue(
+          id,
+          queue
+        );
+
+      /*
+        A failed image remains unprocessed and
+        can be retried during the next sync.
+      */
+      if (
+        ocrResult.failed > 0
+      ) {
+        setError(
+          `Sync completed, but ${ocrResult.failed} image operation(s) failed. Please sync again to retry.`
+        );
+      }
     }
+
+    /*
+      Refresh connected account information.
+    */
+    await load();
+
+  } catch (error) {
+
+    setError(
+      error.response?.data?.detail ||
+        "Sync failed"
+    );
+
+  } finally {
+    setBusy("");
   }
+}
 
   async function disconnect(id) {
     const confirmed = window.confirm(
