@@ -9,8 +9,24 @@ from app.db.session import get_db
 from app.models.models import User, RefreshToken
 from app.schemas.schemas import RegisterIn, LoginIn, UserOut
 from app.services.audit import audit
+from app.core.csrf import issue_csrf
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+@router.get("/csrf")
+def csrf_token(response: Response):
+    token = issue_csrf()
+
+    response.set_cookie(
+        "csrf_token",
+        token,
+        httponly=False,
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+        max_age=86400,
+        path="/",
+    )
+
+    return {"csrf_token": token}
 
 def set_session(response: Response, db: Session, user: User):
     access = create_access_token(user.id)

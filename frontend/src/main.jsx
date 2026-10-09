@@ -11,12 +11,33 @@ import {
 import "./styles.css";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
-const api = axios.create({baseURL: API, withCredentials: true});
-api.interceptors.request.use(config => {
-  const m = document.cookie.match(/(?:^|; )csrf_token=([^;]+)/);
-  if (m && ["post","patch","put","delete"].includes((config.method || "").toLowerCase())) {
-    config.headers["X-CSRF-Token"] = decodeURIComponent(m[1]);
+
+const api = axios.create({
+  baseURL: API,
+  withCredentials: true,
+});
+
+let csrfToken = "";
+
+async function loadCsrfToken() {
+  try {
+    const response = await api.get("/auth/csrf");
+    csrfToken = response.data.csrf_token;
+  } catch (error) {
+    console.error("Failed to initialize CSRF token", error);
   }
+}
+
+api.interceptors.request.use((config) => {
+  const method = (config.method || "").toLowerCase();
+
+  if (
+    csrfToken &&
+    ["post", "patch", "put", "delete"].includes(method)
+  ) {
+    config.headers["X-CSRF-Token"] = csrfToken;
+  }
+
   return config;
 });
 
@@ -34,8 +55,14 @@ function App() {
   const {user, setUser, loading} = useAuth();
   const [dark, setDark] = useState(localStorage.getItem("theme") === "dark");
   useEffect(() => {
-    csrf().finally(() => api.get("/auth/me").then(r => setUser(r.data)).catch(() => setUser(null)));
-  }, [setUser]);
+  loadCsrfToken()
+    .finally(() =>
+      api
+        .get("/auth/me")
+        .then((r) => setUser(r.data))
+        .catch(() => setUser(null))
+    );
+}, [setUser]);
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     localStorage.setItem("theme", dark ? "dark" : "light");

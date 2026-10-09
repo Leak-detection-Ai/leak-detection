@@ -37,13 +37,7 @@ app = FastAPI(
 )
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-CSRF-Token"],
-)
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -107,6 +101,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(CSRFMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.frontend_origin],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
+)
 
 @app.get("/health")
 def health():
