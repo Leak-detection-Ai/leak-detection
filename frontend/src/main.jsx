@@ -3,6 +3,7 @@ import {createRoot} from "react-dom/client";
 import {BrowserRouter, Routes, Route, NavLink} from "react-router-dom";
 import axios from "axios";
 import {create} from "zustand";
+import { createWorker } from "tesseract.js";
 import {
   ShieldCheck, LayoutDashboard, ScanLine, Link2, AlertTriangle, FileText,
   LogOut, Menu, Moon, Sun, Sparkles, BellRing, RefreshCw, ExternalLink,
@@ -185,15 +186,54 @@ function Scanner() {
     try { setR((await api.post("/scan",{content:text})).data); } catch(e) { setError(e.response?.data?.detail||"Scan failed"); } finally { setBusy(false); }
   }
   async function scanImage(e) {
-    e.preventDefault(); if(!file) return; setBusy(true); setError("");
-    try { const fd=new FormData(); fd.append("file",file); setR((await api.post("/scan/image",fd,{headers:{"Content-Type":"multipart/form-data"}})).data); }
-    catch(e) { setError(e.response?.data?.detail||"Image scan failed"); } finally { setBusy(false); }
+  e.preventDefault();
+  if (!file) return;
+
+  setBusy(true);
+  setError("");
+
+  let worker;
+
+  try {
+    worker = await createWorker("eng");
+
+    const { data } = await worker.recognize(file);
+    const extractedText = data.text.trim();
+
+    await worker.terminate();
+
+    if (!extractedText) {
+      throw new Error("No readable text was found in the image.");
+    }
+
+    setText(extractedText);
+
+    const response = await api.post("/scan", {
+      content: extractedText,
+    });
+
+    setR(response.data);
+  } catch (e) {
+    if (worker) {
+      try {
+        await worker.terminate();
+      } catch {}
+    }
+
+    setError(
+      e.response?.data?.detail ||
+      e.message ||
+      "Image OCR failed"
+    );
+  } finally {
+    setBusy(false);
   }
+}
   return <div className="page"><div className="page-head"><div><p className="eyebrow">AI ANALYSIS</p><h1>Leak scanner</h1><p className="muted">Analyze text or extract text from an image with OCR before publishing.</p></div></div>
     <div className="scanner-grid"><section className="card panel">
       <div className="tabs"><button className={mode==="text"?"tab active":"tab"} onClick={()=>setMode("text")}><FileText size={15}/> Text</button><button className={mode==="image"?"tab active":"tab"} onClick={()=>setMode("image")}><ImageIcon size={15}/> Image OCR</button></div>
       {mode==="text" ? <form onSubmit={scan}><label>Content to analyze<textarea value={text} onChange={e=>setText(e.target.value)} rows="14" maxLength="100000"/></label><div className="scan-actions"><span className="muted">{text.length.toLocaleString()} characters</span><button className="primary" disabled={busy}>{busy?"Analyzing…":"Analyze with AI"}</button></div></form>
-      : <form onSubmit={scanImage}><label>Image file<input className="file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>setFile(e.target.files?.[0]||null)}/></label><p className="muted">PNG, JPEG or WebP · max configured upload size.</p><div className="scan-actions"><span className="muted">{file?.name||"No file selected"}</span><button className="primary" disabled={!file||busy}>{busy?"Reading…":"Run OCR + AI"}</button></div></form>}
+      : <form onSubmit={scanImage}><label>Image file<input className="file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>setFile(e.target.files?.[0]||null)}/></label><p className="muted">PNG, JPEG or WebP · max configured upload size.</p><div className="scan-actions"><span className="muted">{file?.name||"No file selected"}</span><button className="primary" disabled={!file||busy}>{busy?"Reading Image…":"Run OCR + AI"}</button></div></form>}
       {error&&<div className="error">{error}</div>}
     </section><section className="card panel"><ResultView r={r}/></section></div>
   </div>;
