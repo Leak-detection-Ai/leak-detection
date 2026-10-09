@@ -199,12 +199,15 @@ function Scanner() {
 
     const { data } = await worker.recognize(file);
     const extractedText = data.text.trim();
+    const [ocrText, setOcrText] = useState("");
 
     await worker.terminate();
 
     if (!extractedText) {
       throw new Error("No readable text was found in the image.");
     }
+
+    setOcrText(extractedText);
 
     setText(extractedText);
 
@@ -235,6 +238,14 @@ function Scanner() {
       {mode==="text" ? <form onSubmit={scan}><label>Content to analyze<textarea value={text} onChange={e=>setText(e.target.value)} rows="14" maxLength="100000"/></label><div className="scan-actions"><span className="muted">{text.length.toLocaleString()} characters</span><button className="primary" disabled={busy}>{busy?"Analyzing…":"Analyze with AI"}</button></div></form>
       : <form onSubmit={scanImage}><label>Image file<input className="file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>setFile(e.target.files?.[0]||null)}/></label><p className="muted">PNG, JPEG or WebP · max configured upload size.</p><div className="scan-actions"><span className="muted">{file?.name||"No file selected"}</span><button className="primary" disabled={!file||busy}>{busy?"Reading Image…":"Run OCR + AI"}</button></div></form>}
       {error&&<div className="error">{error}</div>}
+      {ocrText && (
+  <details className="ocr-preview">
+    <summary>Show extracted text</summary>
+    <pre>{ocrText}</pre>
+  </details>
+)}
+
+{error&&<div className="error">{error}</div>}
     </section><section className="card panel"><ResultView r={r}/></section></div>
   </div>;
 }
