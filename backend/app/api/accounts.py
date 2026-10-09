@@ -13,7 +13,11 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 @router.get("", response_model=list[AccountOut])
 def accounts(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return db.query(SocialAccount).filter_by(user_id=user.id, platform="mastodon").order_by(SocialAccount.created_at.desc()).all()
+    return db.query(SocialAccount).filter_by(
+    user_id=user.id,
+    platform="mastodon",
+    connected=True
+).order_by(SocialAccount.created_at.desc()).all()
 
 @router.delete("/{account_id}")
 def disconnect(account_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
