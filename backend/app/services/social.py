@@ -117,10 +117,18 @@ def store_content(db: Session, account: SocialAccount, items: list[dict]):
             except ValueError:
                 created = None
         media = [
-            {"type": a.get("type"), "url": a.get("url")}
-            for a in (item.get("media_attachments") or [])
-            if a.get("url")
-        ]
+    {
+        "type": a.get("type"),
+        "url": a.get("url"),
+        "preview_url": a.get("preview_url"),
+        "description": a.get("description") or "",
+    }
+    for a in (
+        item.get("media_attachments")
+        or []
+    )
+    if a.get("url")
+]
         db.add(SocialContent(
             account_id=account.id,
             platform="mastodon",
