@@ -25,11 +25,8 @@ class Settings(BaseSettings):
     max_upload_mb: int = 5
     social_sync_interval_seconds: int = 60
 
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-5-mini"
-
-    # Vision model used for OCR of Mastodon image attachments.
-    openai_vision_model: str = "gpt-4.1-mini"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
 
     mastodon_instance: str = "https://mastodon.social"
     mastodon_client_name: str = "LeakGuard"

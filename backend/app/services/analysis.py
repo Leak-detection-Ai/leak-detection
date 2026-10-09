@@ -10,9 +10,7 @@ from app.models.models import (
 )
 
 from app.services.ai_engine import analyze_content
-from app.services.openai_service import (
-    explain_with_openai,
-)
+from app.services.gemini_service import explain_analysis
 from app.services.vision_ocr import (
     extract_text_from_image_url,
 )
@@ -196,11 +194,7 @@ async def analyze_unprocessed_content(
             analysis_text
         )
 
-        enhanced = (
-            await explain_with_openai(
-                result
-            )
-        )
+        enhanced = await explain_analysis(result)
 
         if enhanced:
             result["explanation"] = enhanced

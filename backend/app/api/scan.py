@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.models.models import User
 from app.schemas.schemas import AnalyzeIn, AnalysisOut
 from app.services.ai_engine import analyze_content
-from app.services.openai_service import explain_with_openai
+from app.services.gemini_service import explain_analysis
 from app.services.analysis import persist_manual_analysis
 from app.services.audit import audit
 from app.core.config import settings
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/scan", tags=["scan"])
 @router.post("", response_model=AnalysisOut)
 async def scan(data: AnalyzeIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     result = analyze_content(data.content)
-    enhanced = await explain_with_openai(result)
+    enhanced = await explain_analysis(result)
     if enhanced:
         result["explanation"] = enhanced
     ai = await persist_manual_analysis(db, user, data.content, result)
