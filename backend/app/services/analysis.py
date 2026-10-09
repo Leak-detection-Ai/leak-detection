@@ -10,7 +10,7 @@ from app.models.models import (
 )
 
 from app.services.ai_engine import analyze_content
-from app.services.gemini_service import explain_analysis
+from app.services.openrouter_service import explain_analysis
 from app.services.vision_ocr import (
     extract_text_from_image_url,
 )

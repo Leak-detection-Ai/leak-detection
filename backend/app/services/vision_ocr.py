@@ -1,4 +1,4 @@
-import io
+import base64
 import logging
 
 import httpx
@@ -6,7 +6,12 @@ from PIL import Image
 
 from app.core.config import settings
 
+
 logger = logging.getLogger(__name__)
+
+OPENROUTER_URL = (
+    "https://openrouter.ai/api/v1/chat/completions"
+)
 
 MAX_IMAGE_BYTES = 6 * 1024 * 1024
 
@@ -21,24 +26,13 @@ SUPPORTED_MIME_TYPES = {
 async def extract_text_from_image_url(
     image_url: str,
 ) -> str:
-    """
-    Download a Mastodon image and use Gemini multimodal
-    understanding to extract visible text.
-
-    The extracted text is then passed to the deterministic
-    LeakGuard analyzer.
-    """
-
-    if not settings.gemini_api_key:
+    if not settings.openrouter_api_key:
         logger.warning(
-            "Mastodon image OCR skipped: GEMINI_API_KEY is not configured"
+            "OpenRouter image OCR skipped: API key is not configured"
         )
         return ""
 
-    if not image_url:
-        return ""
-
-    if not image_url.startswith(
+    if not image_url or not image_url.startswith(
         ("http://", "https://")
     ):
         return ""
@@ -46,9 +40,9 @@ async def extract_text_from_image_url(
     try:
         timeout = httpx.Timeout(
             connect=5.0,
-            read=20.0,
-            write=20.0,
-            pool=20.0,
+            read=15.0,
+            write=15.0,
+            pool=10.0,
         )
 
         async with httpx.AsyncClient(
@@ -62,14 +56,13 @@ async def extract_text_from_image_url(
                         "LeakGuard/1.1 image-analysis"
                 },
             )
-
             response.raise_for_status()
 
         image_bytes = response.content
 
         if len(image_bytes) > MAX_IMAGE_BYTES:
             logger.warning(
-                "Skipping Mastodon image: exceeds size limit"
+                "Mastodon image exceeds size limit"
             )
             return ""
 
@@ -82,38 +75,38 @@ async def extract_text_from_image_url(
 
         if content_type not in SUPPORTED_MIME_TYPES:
             logger.warning(
-                "Skipping Mastodon image: unsupported MIME type %s",
+                "Unsupported image MIME type: %s",
                 content_type,
             )
             return ""
 
         image = Image.open(
-            io.BytesIO(image_bytes)
+            __import__("io").BytesIO(image_bytes)
         )
-
         image.verify()
 
-        from google import genai
-        from google.genai import types
+        encoded = base64.b64encode(
+            image_bytes
+        ).decode("utf-8")
 
-        client = genai.Client(
-            api_key=settings.gemini_api_key
+        data_url = (
+            f"data:{content_type};base64,{encoded}"
         )
 
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=[
-                types.Part.from_bytes(
-                    data=image_bytes,
-                    mime_type=content_type,
-                ),
-                """
+        payload = {
+            "model": settings.openrouter_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """
 Extract ALL readable text visible in this image.
 
 This is a cybersecurity leak-detection task.
 
-Preserve security-sensitive strings as accurately as possible,
-including:
+Preserve security-sensitive strings as accurately as possible:
 - email addresses
 - phone numbers
 - API keys
@@ -127,23 +120,63 @@ including:
 - secret phrases
 
 Do NOT summarize.
-Do NOT classify the data.
+Do NOT classify the information.
 Do NOT invent text.
-Return ONLY the text visibly present in the image.
+
+Return ONLY the visible text.
 Keep separate visible lines on separate lines.
 """,
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": data_url
+                            },
+                        },
+                    ],
+                }
             ],
-        )
+            "max_tokens": 1200,
+            "temperature": 0,
+        }
+
+        headers = {
+            "Authorization":
+                f"Bearer {settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": settings.frontend_origin,
+            "X-Title": "LeakGuard",
+        }
+
+        async with httpx.AsyncClient(
+            timeout=timeout
+        ) as client:
+            response = await client.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+
+        result = response.json()
 
         extracted = (
-            response.text or ""
-        ).strip()
+            result.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+
+        logger.info(
+            "OpenRouter Mastodon OCR extracted %s characters",
+            len(extracted),
+        )
 
         return extracted
 
     except httpx.HTTPError as exc:
         logger.warning(
-            "Mastodon image download failed: %s",
+            "OpenRouter image request failed: %s",
             exc,
         )
         return ""
@@ -157,6 +190,6 @@ Keep separate visible lines on separate lines.
 
     except Exception:
         logger.exception(
-            "Gemini image OCR failed"
+            "OpenRouter image OCR failed"
         )
         return ""

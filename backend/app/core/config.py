@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     max_upload_mb: int = 5
     social_sync_interval_seconds: int = 60
 
-    gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.8-flash"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "inclusionai/ling-3.0-flash-vl:free"
 
     mastodon_instance: str = "https://mastodon.social"
     mastodon_client_name: str = "LeakGuard"

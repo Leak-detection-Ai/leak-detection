@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.models.models import User
 from app.schemas.schemas import AnalyzeIn, AnalysisOut
 from app.services.ai_engine import analyze_content
-from app.services.gemini_service import explain_analysis
+from app.services.openrouter_service import explain_analysis
 from app.services.analysis import persist_manual_analysis
 from app.services.audit import audit
 from app.core.config import settings
