@@ -25,9 +25,11 @@ class Settings(BaseSettings):
     max_upload_mb: int = 5
     social_sync_interval_seconds: int = 60
 
+    # OpenRouter
     openrouter_api_key: str | None = None
-    openrouter_model: str = "inclusionai/ling-3.0-flash-vl:free"
+    openrouter_model: str = "google/gemma-4-26b-a4b-it:free"
 
+    # Mastodon
     mastodon_instance: str = "https://mastodon.social"
     mastodon_client_name: str = "LeakGuard"
     mastodon_client_website: str = "http://localhost:5173"
@@ -41,6 +43,7 @@ class Settings(BaseSettings):
 
     mastodon_scopes: str = "read:accounts read:statuses"
 
+    # Demo
     seed_demo: bool = False
     demo_email: str = "demo@example.com"
     demo_password: str = "ChangeThisDemoPassword123!"

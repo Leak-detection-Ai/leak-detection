@@ -3,19 +3,26 @@ import httpx
 from app.core.config import settings
 
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_URL = (
+    "https://openrouter.ai/api/v1/chat/completions"
+)
 
 
 def _headers() -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Authorization": (
+            f"Bearer {settings.openrouter_api_key}"
+        ),
         "Content-Type": "application/json",
         "HTTP-Referer": settings.frontend_origin,
         "X-Title": "LeakGuard",
     }
 
 
-async def explain_analysis(analysis: dict) -> str | None:
+async def explain_analysis(
+    analysis: dict,
+) -> str | None:
+
     if not settings.openrouter_api_key:
         return None
 
@@ -51,32 +58,85 @@ Detection result:
 
     try:
         timeout = httpx.Timeout(
-            connect=5.0,
-            read=20.0,
-            write=10.0,
+            connect=10.0,
+            read=30.0,
+            write=15.0,
             pool=10.0,
         )
 
         async with httpx.AsyncClient(
-            timeout=timeout
+            timeout=timeout,
         ) as client:
+
             response = await client.post(
                 OPENROUTER_URL,
                 headers=_headers(),
                 json=payload,
             )
+
+        if response.status_code >= 400:
+            print(
+                "OpenRouter text error:",
+                response.status_code,
+                response.text[:1000],
+            )
+
             response.raise_for_status()
 
         data = response.json()
 
-        text = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            .strip()
+        choices = data.get(
+            "choices",
+            [],
         )
 
-        return text[:4000] if text else None
+        if not choices:
+            return None
 
-    except Exception:
+        message = choices[0].get(
+            "message",
+            {},
+        )
+
+        text = message.get(
+            "content",
+            "",
+        )
+
+        if isinstance(
+            text,
+            list,
+        ):
+            text = "\n".join(
+                item.get(
+                    "text",
+                    "",
+                )
+                for item in text
+                if isinstance(
+                    item,
+                    dict,
+                )
+            )
+
+        text = (
+            text
+            if isinstance(
+                text,
+                str,
+            )
+            else ""
+        ).strip()
+
+        return (
+            text[:4000]
+            if text
+            else None
+        )
+
+    except Exception as exc:
+        print(
+            "OpenRouter explanation failed:",
+            exc,
+        )
         return None

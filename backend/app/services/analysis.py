@@ -21,25 +21,33 @@ async def build_social_analysis_text(
     content: SocialContent,
 ) -> tuple[str, bool]:
     """
-    Build the complete analysis input from:
-    1. Mastodon status text
-    2. Image alt/description text
-    3. OCR text extracted from image attachments
+    Build analysis input from:
+    - Mastodon status text
+    - Mastodon image descriptions
+    - OCR text extracted from Mastodon images
 
     Returns:
-        combined_text,
-        image_was_analyzed
+        combined analysis text,
+        whether at least one image produced OCR text
     """
 
-    parts = []
+    parts: list[str] = []
 
+    # ---------------------------------------------------------
+    # 1. Mastodon status text
+    # ---------------------------------------------------------
     status_text = (
         content.content or ""
     ).strip()
 
     if status_text:
-        parts.append(status_text)
+        parts.append(
+            status_text
+        )
 
+    # ---------------------------------------------------------
+    # 2. Media metadata
+    # ---------------------------------------------------------
     metadata = (
         content.metadata_json or {}
     )
@@ -49,9 +57,19 @@ async def build_social_analysis_text(
         [],
     )
 
+    if not isinstance(
+        media,
+        list,
+    ):
+        media = []
+
     image_analyzed = False
 
+    # ---------------------------------------------------------
+    # 3. Process image attachments
+    # ---------------------------------------------------------
     for attachment in media[:4]:
+
         if not isinstance(
             attachment,
             dict,
@@ -59,32 +77,58 @@ async def build_social_analysis_text(
             continue
 
         media_type = str(
-            attachment.get("type", "")
-        ).lower()
-
-        image_url = (
-            attachment.get("url")
-            or ""
-        )
+            attachment.get(
+                "type",
+                "",
+            )
+        ).lower().strip()
 
         if media_type != "image":
             continue
 
-        # Analyze Mastodon alt/description text too.
+        # Prefer original image URL.
+        # Fall back to preview URL if original is absent.
+        image_url = (
+            attachment.get("url")
+            or attachment.get(
+                "preview_url"
+            )
+            or ""
+        )
+
         description = (
-            attachment.get("description")
+            attachment.get(
+                "description"
+            )
             or ""
         ).strip()
 
+        # -----------------------------------------------------
+        # 3A. Mastodon alt text
+        # -----------------------------------------------------
         if description:
             parts.append(
                 "[Mastodon image description]\n"
                 + description
             )
 
+        # -----------------------------------------------------
+        # 3B. Actual image OCR
+        # -----------------------------------------------------
         if image_url:
-            extracted = await extract_text_from_image_url(
-                image_url
+            logger_text = (
+                image_url[:250]
+            )
+
+            print(
+                f"LeakGuard: analyzing Mastodon image "
+                f"{logger_text}"
+            )
+
+            extracted = (
+                await extract_text_from_image_url(
+                    image_url
+                )
             )
 
             if extracted:
@@ -95,19 +139,36 @@ async def build_social_analysis_text(
                     + extracted
                 )
 
+    # ---------------------------------------------------------
+    # 4. Final analysis text
+    # ---------------------------------------------------------
     combined = "\n\n".join(
         part
         for part in parts
-        if part.strip()
-    )
+        if isinstance(
+            part,
+            str,
+        )
+        and part.strip()
+    ).strip()
 
-    return combined, image_analyzed
+    return (
+        combined,
+        image_analyzed,
+    )
 
 
 async def analyze_unprocessed_content(
     db: Session,
     user: User | None = None,
 ):
+    """
+    Analyze unprocessed Mastodon content.
+
+    Important:
+    Image-only posts MUST NOT be skipped.
+    """
+
     query = (
         db.query(
             SocialContent,
@@ -145,6 +206,10 @@ async def analyze_unprocessed_content(
     results = []
 
     for content, account, owner in rows:
+
+        # -----------------------------------------------------
+        # 1. Read media metadata
+        # -----------------------------------------------------
         metadata = (
             content.metadata_json or {}
         )
@@ -154,24 +219,56 @@ async def analyze_unprocessed_content(
             [],
         )
 
+        if not isinstance(
+            media,
+            list,
+        ):
+            media = []
+
+        # -----------------------------------------------------
+        # 2. Determine whether the post contains an image
+        # -----------------------------------------------------
         has_image = any(
-            isinstance(item, dict)
+            isinstance(
+                item,
+                dict,
+            )
             and str(
-                item.get("type", "")
-            ).lower()
+                item.get(
+                    "type",
+                    "",
+                )
+            ).lower().strip()
             == "image"
-            and item.get("url")
+            and (
+                item.get("url")
+                or item.get(
+                    "preview_url"
+                )
+            )
             for item in media
         )
 
+        has_status_text = bool(
+            (content.content or "").strip()
+        )
+
+        # -----------------------------------------------------
+        # 3. Skip ONLY completely empty records
+        # -----------------------------------------------------
         if (
-            not (content.content or "").strip()
+            not has_status_text
             and not has_image
         ):
             continue
 
+        # -----------------------------------------------------
+        # 4. Don't analyze same record twice
+        # -----------------------------------------------------
         existing = (
-            db.query(AnalysisResult)
+            db.query(
+                AnalysisResult
+            )
             .filter_by(
                 content_id=content.id
             )
@@ -181,24 +278,43 @@ async def analyze_unprocessed_content(
         if existing:
             continue
 
-        analysis_text, image_analyzed = (
-            await build_social_analysis_text(
-                content
-            )
+        # -----------------------------------------------------
+        # 5. Build text from BOTH text + image OCR
+        # -----------------------------------------------------
+        (
+            analysis_text,
+            image_analyzed,
+        ) = await build_social_analysis_text(
+            content
         )
 
+        # -----------------------------------------------------
+        # 6. If OCR/text produced nothing, don't create
+        #    an empty AI result
+        # -----------------------------------------------------
         if not analysis_text.strip():
             continue
 
+        # -----------------------------------------------------
+        # 7. Deterministic leak detector
+        # -----------------------------------------------------
         result = analyze_content(
             analysis_text
         )
 
-        enhanced = await explain_analysis(result)
+        # -----------------------------------------------------
+        # 8. OpenRouter explanation
+        # -----------------------------------------------------
+        enhanced = await explain_analysis(
+            result
+        )
 
         if enhanced:
             result["explanation"] = enhanced
 
+        # -----------------------------------------------------
+        # 9. Store analysis
+        # -----------------------------------------------------
         ai = AnalysisResult(
             input_text=analysis_text,
             content_id=content.id,
@@ -209,7 +325,11 @@ async def analyze_unprocessed_content(
         db.add(ai)
         db.flush()
 
+        # -----------------------------------------------------
+        # 10. Create incident + alert for high risk
+        # -----------------------------------------------------
         if result["risk_score"] >= 61:
+
             incident = Incident(
                 user_id=owner.id,
                 analysis_id=ai.id,
@@ -219,7 +339,10 @@ async def analyze_unprocessed_content(
                 ),
             )
 
-            db.add(incident)
+            db.add(
+                incident
+            )
+
             db.flush()
 
             db.add(
@@ -231,14 +354,17 @@ async def analyze_unprocessed_content(
                     ],
                     message=(
                         "LeakGuard detected a "
-                        f"{result['severity']} risk "
-                        "finding from Mastodon."
+                        f"{result['severity']} "
+                        "risk finding from Mastodon."
                     ),
                 )
             )
 
             incidents += 1
 
+        # -----------------------------------------------------
+        # 11. Audit
+        # -----------------------------------------------------
         audit(
             db,
             owner.id,
@@ -250,6 +376,8 @@ async def analyze_unprocessed_content(
                 "content_id": content.content_id,
                 "image_ocr": image_analyzed,
                 "media_count": len(media),
+                "has_image": has_image,
+                "has_status_text": has_status_text,
             },
         )
 
@@ -277,6 +405,10 @@ async def persist_manual_analysis(
     text: str,
     result: dict,
 ):
+    """
+    Save manual scanner result.
+    """
+
     ai = AnalysisResult(
         input_text=text,
         user_id=user.id,
@@ -287,6 +419,7 @@ async def persist_manual_analysis(
     db.flush()
 
     if result["risk_score"] >= 61:
+
         incident = Incident(
             user_id=user.id,
             analysis_id=ai.id,
@@ -296,7 +429,10 @@ async def persist_manual_analysis(
             ),
         )
 
-        db.add(incident)
+        db.add(
+            incident
+        )
+
         db.flush()
 
         db.add(
