@@ -19,18 +19,19 @@ from app.models.models import (
     User,
 )
 from app.schemas.schemas import AccountOut
-from app.services.social import (
-    decrypt_secret,
-    encrypt_secret,
-    mastodon_refresh,
-    mastodon_statuses,
-    store_content,
-    find_deleted_open_incident_content,
+
+from app.services.analysis import (
+    analyze_unprocessed_content,
+    persist_social_ocr_analysis,
+    reconcile_deleted_social_content,
 )
+
 from app.services.audit import audit
+
 from app.services.social import (
     decrypt_secret,
     encrypt_secret,
+    find_deleted_open_incident_content,
     mastodon_refresh,
     mastodon_statuses,
     store_content,
@@ -256,9 +257,7 @@ async def sync(
             ):
                 account.refresh_token_encrypted = (
                     encrypt_secret(
-                        token[
-                            "refresh_token"
-                        ]
+                        token["refresh_token"]
                     )
                 )
 
@@ -298,40 +297,53 @@ async def sync(
     # Save NEW statuses and UPDATE EDITED statuses
     # ---------------------------------------------------------
     sync_result = store_content(
-    db,
-    account,
-    items,
-)
-
-deleted_ids = await find_deleted_open_incident_content(
-    db,
-    account,
-    access,
-)
-
-deleted_resolved = reconcile_deleted_social_content(
-    db,
-    user,
-    deleted_ids,
-)
-
-analyzed, incidents, results = (
-    await analyze_unprocessed_content(
         db,
-        user,
+        account,
+        items,
     )
-)
 
     # ---------------------------------------------------------
-    # Build browser OCR queue
+    # Check statuses belonging to active incidents.
     #
-    # IMPORTANT:
-    # Queue uses the DATABASE content UUID.
-    # This allows the frontend to call:
-    # /accounts/{account_id}/content/{content_id}/...
+    # A status is marked deleted only when Mastodon confirms
+    # that the individual status no longer exists.
+    # ---------------------------------------------------------
+    deleted_ids = await find_deleted_open_incident_content(
+        db,
+        account,
+        access,
+    )
+
+    # ---------------------------------------------------------
+    # Resolve incidents belonging to confirmed deleted posts.
+    # Historical analysis remains stored.
+    # ---------------------------------------------------------
+    deleted_resolved = (
+        reconcile_deleted_social_content(
+            db,
+            user,
+            deleted_ids,
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Analyze NEW / EDITED text-only statuses.
     #
-    # Edited image posts are queued again because
-    # store_content() sets analysis_pending=True.
+    # Edited content is reanalyzed because store_content()
+    # marks changed records with analysis_pending=True.
+    # ---------------------------------------------------------
+    analyzed, incidents, results = (
+        await analyze_unprocessed_content(
+            db,
+            user,
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Build browser OCR queue.
+    #
+    # Images are scanned locally in the browser using
+    # Tesseract.js. No external image AI API is required.
     # ---------------------------------------------------------
     ocr_queue = []
 
@@ -372,73 +384,11 @@ analyzed, incidents, results = (
             )
         )
 
-        # -----------------------------------------------------
-        # IMPORTANT:
-        # Previously we skipped every post with an existing
-        # AnalysisResult.
+        # Skip only when an existing analysis is current.
         #
-        # That prevented edited Mastodon images from being
-        # rescanned.
-        #
-        # Now we only skip when the analysis is already current.
-        # -----------------------------------------------------
-        if (
-            existing
-            and not analysis_pending
-        ):
-            continue
-
-        media = _image_media(
-            content
-        )
-
-        if not media:
-            continue
-
-        if metadata.get(
-            "source_state"
-        ) == "deleted":
-            continue
-
-            ocr_queue = []
-
-    image_contents = (
-        db.query(
-            SocialContent
-        )
-        .filter_by(
-            account_id=account.id
-        )
-        .order_by(
-            SocialContent.remote_created_at.desc()
-        )
-        .limit(40)
-        .all()
-    )
-
-    for content in image_contents:
-
-        metadata = dict(
-            content.metadata_json or {}
-        )
-
-        existing = (
-            db.query(
-                AnalysisResult
-            )
-            .filter_by(
-                content_id=content.id
-            )
-            .first()
-        )
-
-        analysis_pending = bool(
-            metadata.get(
-                "analysis_pending",
-                existing is None,
-            )
-        )
-
+        # If the Mastodon post was edited,
+        # store_content() sets analysis_pending=True,
+        # so the image will be queued again.
         if (
             existing
             and not analysis_pending
@@ -464,6 +414,31 @@ analyzed, incidents, results = (
                 "media": media,
             }
         )
+
+    return {
+        "synced": sync_result["total"],
+        "inserted": sync_result["inserted"],
+        "changed": sync_result["changed"],
+        "deleted": len(
+            deleted_ids
+        ),
+        "deleted_resolved": deleted_resolved,
+        "analyzed": analyzed,
+        "incidents_created": incidents,
+        "ocr_queue": ocr_queue,
+        "results": [
+            {
+                "id": ai.id,
+                "risk_score": result[
+                    "risk_score"
+                ],
+                "severity": result[
+                    "severity"
+                ],
+            }
+            for ai, result in results
+        ],
+    }
 
 
 @router.get(
@@ -716,14 +691,23 @@ async def analyze_social_ocr(
             "Cannot analyze a deleted Mastodon status",
         )
 
-    ai, result, incident_created = (
-        await persist_social_ocr_analysis(
-            db,
-            user,
-            content,
-            data.ocr_text,
+    try:
+
+        ai, result, incident_created = (
+            await persist_social_ocr_analysis(
+                db,
+                user,
+                content,
+                data.ocr_text,
+            )
         )
-    )
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            409,
+            str(exc),
+        ) from exc
 
     return {
         "id": ai.id,
