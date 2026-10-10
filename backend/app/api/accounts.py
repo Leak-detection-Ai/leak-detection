@@ -19,9 +19,13 @@ from app.models.models import (
     User,
 )
 from app.schemas.schemas import AccountOut
-from app.services.analysis import (
-    analyze_unprocessed_content,
-    persist_social_ocr_analysis,
+from app.services.social import (
+    decrypt_secret,
+    encrypt_secret,
+    mastodon_refresh,
+    mastodon_statuses,
+    store_content,
+    find_deleted_open_incident_content,
 )
 from app.services.audit import audit
 from app.services.social import (
@@ -293,21 +297,30 @@ async def sync(
     # ---------------------------------------------------------
     # Save NEW statuses and UPDATE EDITED statuses
     # ---------------------------------------------------------
-    synced = store_content(
-        db,
-        account,
-        items,
-    )
+    sync_result = store_content(
+    db,
+    account,
+    items,
+)
 
-    # ---------------------------------------------------------
-    # Analyze text-only NEW/EDITED statuses
-    # ---------------------------------------------------------
-    analyzed, incidents, results = (
-        await analyze_unprocessed_content(
-            db,
-            user,
-        )
+deleted_ids = await find_deleted_open_incident_content(
+    db,
+    account,
+    access,
+)
+
+deleted_resolved = reconcile_deleted_social_content(
+    db,
+    user,
+    deleted_ids,
+)
+
+analyzed, incidents, results = (
+    await analyze_unprocessed_content(
+        db,
+        user,
     )
+)
 
     # ---------------------------------------------------------
     # Build browser OCR queue
@@ -396,23 +409,23 @@ async def sync(
         )
 
     return {
-        "synced": synced,
-        "analyzed": analyzed,
-        "incidents_created": incidents,
-        "ocr_queue": ocr_queue,
-        "results": [
-            {
-                "id": ai.id,
-                "risk_score": result[
-                    "risk_score"
-                ],
-                "severity": result[
-                    "severity"
-                ],
-            }
-            for ai, result in results
-        ],
-    }
+    "synced": sync_result["total"],
+    "inserted": sync_result["inserted"],
+    "changed": sync_result["changed"],
+    "deleted": len(deleted_ids),
+    "deleted_resolved": deleted_resolved,
+    "analyzed": analyzed,
+    "incidents_created": incidents,
+    "ocr_queue": ocr_queue,
+    "results": [
+        {
+            "id": ai.id,
+            "risk_score": result["risk_score"],
+            "severity": result["severity"],
+        }
+        for ai, result in results
+    ],
+}
 
 
 @router.get(
