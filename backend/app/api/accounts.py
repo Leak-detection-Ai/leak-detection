@@ -400,6 +400,63 @@ analyzed, incidents, results = (
         ) == "deleted":
             continue
 
+            ocr_queue = []
+
+    image_contents = (
+        db.query(
+            SocialContent
+        )
+        .filter_by(
+            account_id=account.id
+        )
+        .order_by(
+            SocialContent.remote_created_at.desc()
+        )
+        .limit(40)
+        .all()
+    )
+
+    for content in image_contents:
+
+        metadata = dict(
+            content.metadata_json or {}
+        )
+
+        existing = (
+            db.query(
+                AnalysisResult
+            )
+            .filter_by(
+                content_id=content.id
+            )
+            .first()
+        )
+
+        analysis_pending = bool(
+            metadata.get(
+                "analysis_pending",
+                existing is None,
+            )
+        )
+
+        if (
+            existing
+            and not analysis_pending
+        ):
+            continue
+
+        media = _image_media(
+            content
+        )
+
+        if not media:
+            continue
+
+        if metadata.get(
+            "source_state"
+        ) == "deleted":
+            continue
+
         ocr_queue.append(
             {
                 "content_id": content.id,
@@ -407,25 +464,6 @@ analyzed, incidents, results = (
                 "media": media,
             }
         )
-
-    return {
-    "synced": sync_result["total"],
-    "inserted": sync_result["inserted"],
-    "changed": sync_result["changed"],
-    "deleted": len(deleted_ids),
-    "deleted_resolved": deleted_resolved,
-    "analyzed": analyzed,
-    "incidents_created": incidents,
-    "ocr_queue": ocr_queue,
-    "results": [
-        {
-            "id": ai.id,
-            "risk_score": result["risk_score"],
-            "severity": result["severity"],
-        }
-        for ai, result in results
-    ],
-}
 
 
 @router.get(
