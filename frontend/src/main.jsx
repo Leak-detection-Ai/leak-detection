@@ -27,6 +27,7 @@ import {
   ExternalLink,
   CheckCircle2,
   Image as ImageIcon,
+  UserCircle,
 } from "lucide-react";
 
 import "./styles.css";
@@ -288,13 +289,14 @@ function Shell({ dark, setDark }) {
   const user = useAuth((state) => state.user);
 
   const nav = [
-    ["/", "Dashboard", LayoutDashboard],
-    ["/scan", "AI Scanner", ScanLine],
-    ["/accounts", "Mastodon", Link2],
-    ["/incidents", "Incidents", AlertTriangle],
-    ["/alerts", "Alerts", BellRing],
-    ["/reports", "Reports", FileText],
-  ];
+  ["/", "Dashboard", LayoutDashboard],
+  ["/scan", "AI Scanner", ScanLine],
+  ["/accounts", "Mastodon", Link2],
+  ["/incidents", "Incidents", AlertTriangle],
+  ["/alerts", "Alerts", BellRing],
+  ["/reports", "Reports", FileText],
+  ["/profile", "Profile", UserCircle],
+];
 
   async function loadUnread() {
     try {
@@ -373,17 +375,23 @@ function Shell({ dark, setDark }) {
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="user-chip">
-            <div className="avatar">
-              {user?.email?.[0]?.toUpperCase() ||
-                "U"}
-            </div>
+          <NavLink
+  to="/profile"
+  className="user-chip profile-chip"
+  onClick={() => setOpen(false)}
+>
+  <div className="avatar">
+    {user?.email?.[0]?.toUpperCase() ||
+      "U"}
+  </div>
 
-            <div>
-              <b>{user?.email}</b>
-              <span>{user?.role}</span>
-            </div>
-          </div>
+  <div>
+    <b>{user?.email}</b>
+    <span>{user?.role}</span>
+  </div>
+
+  <UserCircle size={15} />
+</NavLink>
 
           <button
             className="ghost"
@@ -461,6 +469,15 @@ function Shell({ dark, setDark }) {
             path="/reports"
             element={<Reports />}
           />
+          <Route
+  path="/profile"
+  element={
+    <Profile
+      dark={dark}
+      setDark={setDark}
+    />
+  }
+/>
         </Routes>
       </main>
     </div>
@@ -1373,6 +1390,11 @@ function Accounts() {
       Refresh connected account information.
     */
     await load();
+    window.dispatchEvent(
+  new CustomEvent(
+    "leakguard:mastodon-sync-complete"
+  )
+);
 
   } catch (error) {
 
@@ -1846,24 +1868,91 @@ function IncidentCard({
    INCIDENTS
 ------------------------------------------------------- */
 
+/* -------------------------------------------------------
+   INCIDENTS
+------------------------------------------------------- */
+
 function Incidents() {
   const [rows, setRows] =
     useState([]);
 
-  async function load() {
-    const response =
-      await api.get("/incidents");
+  const [loading, setLoading] =
+    useState(true);
 
-    setRows(response.data);
-  }
+  const [refreshing, setRefreshing] =
+    useState(false);
 
-  useEffect(() => {
-    load().catch((error) =>
+  const [error, setError] =
+    useState("");
+
+  async function load(
+    showLoader = false
+  ) {
+    if (showLoader) {
+      setRefreshing(true);
+    }
+
+    try {
+      const response =
+        await api.get("/incidents");
+
+      setRows(
+        response.data || []
+      );
+
+      setError("");
+    } catch (error) {
       console.error(
         "Incident loading failed",
         error
-      )
+      );
+
+      setError(
+        error.response?.data?.detail ||
+          "Failed to load incidents"
+      );
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    /*
+      Initial load.
+    */
+    load();
+
+    /*
+      Keep the incident queue synchronized
+      with background Mastodon reconciliation.
+    */
+    const timer = setInterval(
+      () => load(false),
+      15000
     );
+
+    /*
+      Refresh immediately when another part
+      of the application finishes a Mastodon sync.
+    */
+    function handleSyncComplete() {
+      load(false);
+    }
+
+    window.addEventListener(
+      "leakguard:mastodon-sync-complete",
+      handleSyncComplete
+    );
+
+    return () => {
+      clearInterval(timer);
+
+      window.removeEventListener(
+        "leakguard:mastodon-sync-complete",
+        handleSyncComplete
+      );
+    };
   }, []);
 
   return (
@@ -1877,22 +1966,61 @@ function Incidents() {
           <h1>Incidents</h1>
 
           <p className="muted">
-            Review evidence, recommended
-            action and lifecycle state for
-            every detected leak.
+            Review evidence, risk and
+            lifecycle state for every
+            detected Mastodon leak.
           </p>
         </div>
+
+        <button
+          className="ghost"
+          onClick={() => load(true)}
+          disabled={refreshing}
+        >
+          <RefreshCw
+            size={15}
+            className={
+              refreshing
+                ? "spin-icon"
+                : ""
+            }
+          />
+
+          {refreshing
+            ? "Refreshing..."
+            : "Refresh"}
+        </button>
       </div>
 
-      {rows.length ? (
+      {error && (
+        <div className="error">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <section className="card panel">
+          <div className="empty big">
+            <div className="pulse" />
+
+            <p>
+              Loading incidents...
+            </p>
+          </div>
+        </section>
+      ) : rows.length ? (
         <div className="incident-list">
-          {rows.map((incident) => (
-            <IncidentCard
-              key={incident.id}
-              incident={incident}
-              onUpdated={load}
-            />
-          ))}
+          {rows.map(
+            (incident) => (
+              <IncidentCard
+                key={incident.id}
+                incident={incident}
+                onUpdated={() =>
+                  load(false)
+                }
+              />
+            )
+          )}
         </div>
       ) : (
         <section className="card panel">
@@ -1900,13 +2028,12 @@ function Incidents() {
             <CheckCircle2 />
 
             <h2>
-              No open findings
+              No incidents
             </h2>
 
             <p>
-              Run a scan or wait for the
-              Mastodon monitor to detect a
-              leak.
+              No current incident records
+              were found for your account.
             </p>
           </div>
         </section>
@@ -2066,7 +2193,393 @@ function Alerts() {
     </div>
   );
 }
+/* -------------------------------------------------------
+   PROFILE
+------------------------------------------------------- */
 
+function Profile({
+  dark,
+  setDark,
+}) {
+  const setUser = useAuth(
+    (state) => state.setUser
+  );
+
+  const [profile, setProfile] =
+    useState(null);
+
+  const [accounts, setAccounts] =
+    useState([]);
+
+  const [email, setEmail] =
+    useState("");
+
+  const [busy, setBusy] =
+    useState(true);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [message, setMessage] =
+    useState("");
+
+  async function load() {
+    setBusy(true);
+    setError("");
+
+    try {
+      const [
+        profileResponse,
+        accountsResponse,
+      ] = await Promise.all([
+        api.get("/profile"),
+        api.get("/accounts"),
+      ]);
+
+      setProfile(
+        profileResponse.data
+      );
+
+      setEmail(
+        profileResponse.data.email || ""
+      );
+
+      setAccounts(
+        accountsResponse.data || []
+      );
+    } catch (error) {
+      setError(
+        error.response?.data?.detail ||
+          "Failed to load profile"
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function saveProfile(
+    event
+  ) {
+    event.preventDefault();
+
+    setError("");
+    setMessage("");
+    setSaving(true);
+
+    try {
+      const response =
+        await api.patch(
+          "/profile",
+          {
+            email: email.trim(),
+          }
+        );
+
+      setProfile(
+        response.data
+      );
+
+      setEmail(
+        response.data.email
+      );
+
+      /*
+        Keep the global authentication
+        store synchronized.
+      */
+      setUser(
+        response.data
+      );
+
+      setMessage(
+        "Profile updated successfully."
+      );
+    } catch (error) {
+      setError(
+        error.response?.data?.detail ||
+          "Profile update failed"
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (busy) {
+    return (
+      <div className="center">
+        <div className="pulse" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">
+            ACCOUNT
+          </p>
+
+          <h1>
+            Profile & Settings
+          </h1>
+
+          <p className="muted">
+            Manage your LeakGuard account
+            information and application
+            preferences.
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="error">
+          {error}
+        </div>
+      )}
+
+      {message && (
+        <div className="success-message">
+          {message}
+        </div>
+      )}
+
+      <div className="grid-2">
+        <section className="card panel">
+          <div className="panel-title">
+            <div>
+              <h2>
+                Account information
+              </h2>
+
+              <span className="muted">
+                Your LeakGuard identity
+              </span>
+            </div>
+
+            <div className="profile-large-avatar">
+              {profile?.email?.[0]?.toUpperCase() ||
+                "U"}
+            </div>
+          </div>
+
+          <form
+            onSubmit={saveProfile}
+          >
+            <label>
+              Email address
+
+              <input
+                type="email"
+                value={email}
+                onChange={(event) =>
+                  setEmail(
+                    event.target.value
+                  )
+                }
+                required
+              />
+            </label>
+
+            <label>
+              Account role
+
+              <input
+                type="text"
+                value={
+                  profile?.role ||
+                  "user"
+                }
+                readOnly
+              />
+            </label>
+
+            <label>
+              User ID
+
+              <input
+                type="text"
+                value={
+                  profile?.id || ""
+                }
+                readOnly
+              />
+            </label>
+
+            <button
+              className="primary"
+              type="submit"
+              disabled={saving}
+            >
+              {saving
+                ? "Saving..."
+                : "Save profile"}
+            </button>
+          </form>
+        </section>
+
+        <section className="card panel">
+          <div className="panel-title">
+            <div>
+              <h2>
+                Appearance
+              </h2>
+
+              <span className="muted">
+                Application preferences
+              </span>
+            </div>
+
+            <Sparkles size={18} />
+          </div>
+
+          <div className="profile-setting-row">
+            <div>
+              <b>
+                Theme
+              </b>
+
+              <span>
+                Choose how LeakGuard
+                appears.
+              </span>
+            </div>
+
+            <button
+              className="ghost"
+              onClick={() =>
+                setDark(!dark)
+              }
+            >
+              {dark ? (
+                <>
+                  <Sun size={15} />
+                  Light mode
+                </>
+              ) : (
+                <>
+                  <Moon size={15} />
+                  Dark mode
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="profile-setting-row">
+            <div>
+              <b>
+                Security session
+              </b>
+
+              <span>
+                Your current authenticated
+                LeakGuard session is active.
+              </span>
+            </div>
+
+            <span className="tag">
+              Active
+            </span>
+          </div>
+        </section>
+      </div>
+
+      <section className="card panel">
+        <div className="panel-title">
+          <div>
+            <h2>
+              Connected Mastodon account
+            </h2>
+
+            <span className="muted">
+              Authorized social identity
+            </span>
+          </div>
+
+          <span className="tag">
+            {accounts.length}
+          </span>
+        </div>
+
+        {accounts.length ? (
+          accounts.map(
+            (account) => (
+              <div
+                className="account-row"
+                key={account.id}
+              >
+                <div className="platform-icon small">
+                  M
+                </div>
+
+                <div>
+                  <b>
+                    {account.username}
+                  </b>
+
+                  <span>
+                    Mastodon ·{" "}
+                    {account.instance_url
+                      ? new URL(
+                          account.instance_url
+                        ).hostname
+                      : "instance"}
+                  </span>
+
+                  <span>
+                    Status:{" "}
+                    {account.connected
+                      ? "Connected"
+                      : "Disconnected"}
+                  </span>
+
+                  <span>
+                    Last sync:{" "}
+                    {account.last_sync
+                      ? new Date(
+                          account.last_sync
+                        ).toLocaleString()
+                      : "Not yet"}
+                  </span>
+                </div>
+
+                <NavLink
+                  className="ghost"
+                  to="/accounts"
+                >
+                  Manage
+                </NavLink>
+              </div>
+            )
+          )
+        ) : (
+          <div className="empty">
+            <Link2 />
+
+            <p>
+              No Mastodon account is
+              connected.
+            </p>
+
+            <NavLink
+              className="primary"
+              to="/accounts"
+            >
+              Connect Mastodon
+            </NavLink>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
 /* -------------------------------------------------------
    REPORTS
 ------------------------------------------------------- */

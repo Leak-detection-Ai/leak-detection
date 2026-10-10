@@ -11,10 +11,11 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import auth, oauth, accounts, scan, incidents, dashboard, reports, content, admin
+from app.api import auth, oauth, accounts, scan, incidents, dashboard, reports, content, admin, profile
 from app.core.config import settings
 from app.core.csrf import issue_csrf, valid_csrf
 from app.services.scheduler import start_scheduler, stop_scheduler
+
 
 logging.basicConfig(level=logging.INFO)
 limiter = Limiter(
@@ -123,3 +124,7 @@ app.include_router(dashboard.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(content.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(
+    profile.router,
+    prefix="/api",
+)
