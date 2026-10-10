@@ -332,18 +332,29 @@ async def sync(
 
     for content in image_contents:
 
+        metadata = dict(
+    content.metadata_json or {}
+)
+
         existing = (
             db.query(
-                AnalysisResult
-            )
-            .filter_by(
-                content_id=content.id
-            )
-            .first()
+            AnalysisResult
         )
+        .filter_by(
+        content_id=content.id
+        )
+        .first()
+    )
 
-        if existing:
-            continue
+        analysis_pending = bool(
+            metadata.get(
+            "analysis_pending",
+            existing is None,
+        )
+)
+
+        if existing and not analysis_pending:
+        continue
 
         media = _image_media(
             content
