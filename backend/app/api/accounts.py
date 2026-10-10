@@ -281,11 +281,9 @@ async def sync(
                 token["access_token"],
             )
 
+            access = token["access_token"]
+
         except Exception as exc:
-
-            account.connected = False
-
-            db.commit()
 
             raise HTTPException(
                 502,
@@ -293,7 +291,7 @@ async def sync(
             ) from exc
 
     # ---------------------------------------------------------
-    # Save Mastodon statuses
+    # Save NEW statuses and UPDATE EDITED statuses
     # ---------------------------------------------------------
     synced = store_content(
         db,
@@ -302,7 +300,7 @@ async def sync(
     )
 
     # ---------------------------------------------------------
-    # Analyze text-only posts
+    # Analyze text-only NEW/EDITED statuses
     # ---------------------------------------------------------
     analyzed, incidents, results = (
         await analyze_unprocessed_content(
@@ -313,6 +311,14 @@ async def sync(
 
     # ---------------------------------------------------------
     # Build browser OCR queue
+    #
+    # IMPORTANT:
+    # Queue uses the DATABASE content UUID.
+    # This allows the frontend to call:
+    # /accounts/{account_id}/content/{content_id}/...
+    #
+    # Edited image posts are queued again because
+    # store_content() sets analysis_pending=True.
     # ---------------------------------------------------------
     ocr_queue = []
 
@@ -333,28 +339,41 @@ async def sync(
     for content in image_contents:
 
         metadata = dict(
-    content.metadata_json or {}
-)
+            content.metadata_json or {}
+        )
 
         existing = (
             db.query(
-            AnalysisResult
+                AnalysisResult
+            )
+            .filter_by(
+                content_id=content.id
+            )
+            .first()
         )
-        .filter_by(
-        content_id=content.id
-        )
-        .first()
-    )
 
         analysis_pending = bool(
             metadata.get(
-            "analysis_pending",
-            existing is None,
+                "analysis_pending",
+                existing is None,
+            )
         )
-)
 
-        if existing and not analysis_pending:
-        continue
+        # -----------------------------------------------------
+        # IMPORTANT:
+        # Previously we skipped every post with an existing
+        # AnalysisResult.
+        #
+        # That prevented edited Mastodon images from being
+        # rescanned.
+        #
+        # Now we only skip when the analysis is already current.
+        # -----------------------------------------------------
+        if (
+            existing
+            and not analysis_pending
+        ):
+            continue
 
         media = _image_media(
             content
@@ -363,9 +382,11 @@ async def sync(
         if not media:
             continue
 
-        # IMPORTANT:
-        # content_id here is the DATABASE UUID.
-        # The frontend uses this to call the media/OCR endpoints.
+        if metadata.get(
+            "source_state"
+        ) == "deleted":
+            continue
+
         ocr_queue.append(
             {
                 "content_id": content.id,
@@ -630,6 +651,18 @@ async def analyze_social_ocr(
         raise HTTPException(
             404,
             "Social content not found",
+        )
+
+    metadata = dict(
+        content.metadata_json or {}
+    )
+
+    if metadata.get(
+        "source_state"
+    ) == "deleted":
+        raise HTTPException(
+            409,
+            "Cannot analyze a deleted Mastodon status",
         )
 
     ai, result, incident_created = (
